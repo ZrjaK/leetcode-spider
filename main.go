@@ -58,7 +58,7 @@ var client = http.Client{}
 func main() {
 	InitEnv()
 	InitXormEngine()
-	// UpdateAcceptedQuestion()
+	UpdateAcceptedQuestion()
 	GenerateFile()
 }
 
@@ -191,15 +191,11 @@ func UpdateAcceptedQuestion() {
 	body, _ := ioutil.ReadAll(res.Body)
 	q, sp := GetAcceptedQuestion(body)
 	engine.Sync(new(Question))
-	for _, i := range q {
-		engine.Insert(&i)
-		engine.Update(&i)
-	}
+	engine.Insert(&q)
+	engine.Update(&q)
 	engine.Sync(new(SpecialQuestion))
-	for _, i := range sp {
-		engine.Insert(&i)
-		engine.Update(&i)
-	}
+	engine.Insert(&sp)
+	engine.Update(&sp)
 	engine.Sync(new(LastSubmission))
 	for h, i := range q {
 		n, _ := engine.Table("last_submission").Where("question_id = ?", i.QuestionId).Count()
@@ -215,7 +211,7 @@ func UpdateAcceptedQuestion() {
 		engine.Insert(&lastSubmission)
 		engine.Update(&lastSubmission)
 		time.Sleep(time.Millisecond * 100)
-		fmt.Println(h, i.QuestionId, lastSubmission.Language)
+		fmt.Println(h, i.QuestionId, lastSubmission.DetailId, lastSubmission.Language)
 	}
 	for _, i := range sp {
 		n, _ := engine.Where("question_id = ?", i.QuestionId).Count()
