@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -89,6 +90,9 @@ func GenerateFile() {
 			text += fmt.Sprintf("%v 作者：ZrjaK\n\n", c)
 			text += sub.Code
 			os.Mkdir("answer", 0666)
+			if question.TranslatedTitle == "" {
+				return errors.New("查询题目出错")
+			}
 			ioutil.WriteFile(path.Join("answer", fmt.Sprintf("%v.%v%v", question.QuestionId, question.TranslatedTitle, ext)),
 				[]byte(text), 0666)
 		} else {
@@ -101,6 +105,9 @@ func GenerateFile() {
 			text += fmt.Sprintf("%v 作者：ZrjaK\n\n", c)
 			text += sub.Code
 			os.Mkdir("answer", 0666)
+			if sp.TranslatedTitle == "" {
+				return errors.New("查询题目出错")
+			}
 			ioutil.WriteFile(path.Join("answer", fmt.Sprintf("%v.%v%v", sp.QuestionId, sp.TranslatedTitle, ext)),
 				[]byte(text), 0666)
 		}
@@ -191,11 +198,13 @@ func UpdateAcceptedQuestion() {
 	body, _ := ioutil.ReadAll(res.Body)
 	q, sp := GetAcceptedQuestion(body)
 	engine.Sync(new(Question))
+	engine.Where(`1 = 1`).Delete(new(Question))
 	engine.Insert(&q)
-	engine.Update(&q)
+
 	engine.Sync(new(SpecialQuestion))
+	engine.Where(`1 = 1`).Delete(new(SpecialQuestion))
 	engine.Insert(&sp)
-	engine.Update(&sp)
+
 	engine.Sync(new(LastSubmission))
 	for h, i := range q {
 		n, _ := engine.Table("last_submission").Where("question_id = ?", i.QuestionId).Count()
