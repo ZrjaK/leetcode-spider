@@ -6,9 +6,9 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
-	"strconv"
 	"strings"
 	"time"
 
@@ -27,7 +27,7 @@ var (
 
 var engine *xorm.Engine
 
-type SpecialQuestion struct {
+type Question struct {
 	QuestionId      string    `xorm:"pk"`
 	Title           string    `xorm:""`
 	TranslatedTitle string    `xorm:""`
@@ -37,24 +37,19 @@ type SpecialQuestion struct {
 	LastSubmittedAt time.Time `xorm:""`
 }
 
-type Question struct {
-	QuestionId      int64     `xorm:"pk"`
-	Title           string    `xorm:""`
-	TranslatedTitle string    `xorm:""`
-	TitleSlug       string    `xorm:""`
-	Difficulty      string    `xorm:""`
-	NumSubmitted    int64     `xorm:""`
+type LastSubmission struct {
+	DetailId        int64     `xorm:"pk"`
+	QuestionId      string    `xorm:""`
+	Language        string    `xorm:""`
+	Code            string    `xorm:"LONGTEXT"`
 	LastSubmittedAt time.Time `xorm:""`
 }
 
-type LastSubmission struct {
-	DetailId   int64  `xorm:"pk"`
-	QuestionId string `xorm:""`
-	Language   string `xorm:""`
-	Code       string `xorm:"LONGTEXT"`
-}
-
-var client = http.Client{}
+var client = http.Client{Transport: &http.Transport{
+	Proxy: func(r *http.Request) (*url.URL, error) {
+		return url.Parse("http://127.0.0.1:7890")
+	},
+}}
 
 func main() {
 	InitEnv()
@@ -81,36 +76,19 @@ func GenerateFile() {
 		}
 		text := ""
 		question := Question{}
-		exist, _ := engine.Table("question").Where("question_id = ?", sub.QuestionId).Get(&question)
-		if exist {
-			text += fmt.Sprintf("%v 题目：%v.%v\n", c, question.QuestionId, question.TranslatedTitle)
-			text += fmt.Sprintf("%v 难度：%v\n", c, question.Difficulty)
-			text += fmt.Sprintf("%v 最后提交：%v\n", c, question.LastSubmittedAt)
-			text += fmt.Sprintf("%v 语言：%v\n", c, sub.Language)
-			text += fmt.Sprintf("%v 作者：ZrjaK\n\n", c)
-			text += sub.Code
-			os.Mkdir("answer", 0666)
-			if question.TranslatedTitle == "" {
-				return errors.New("查询题目出错")
-			}
-			ioutil.WriteFile(path.Join("answer", fmt.Sprintf("%v.%v%v", question.QuestionId, question.TranslatedTitle, ext)),
-				[]byte(text), 0666)
-		} else {
-			sp := SpecialQuestion{}
-			engine.Table("special_question").Where("question_id = ?", sub.QuestionId).Get(&sp)
-			text += fmt.Sprintf("%v 题目：%v.%v\n", c, sp.QuestionId, sp.TranslatedTitle)
-			text += fmt.Sprintf("%v 难度：%v\n", c, sp.Difficulty)
-			text += fmt.Sprintf("%v 最后提交：%v\n", c, sp.LastSubmittedAt)
-			text += fmt.Sprintf("%v 语言：%v\n", c, sub.Language)
-			text += fmt.Sprintf("%v 作者：ZrjaK\n\n", c)
-			text += sub.Code
-			os.Mkdir("answer", 0666)
-			if sp.TranslatedTitle == "" {
-				return errors.New("查询题目出错")
-			}
-			ioutil.WriteFile(path.Join("answer", fmt.Sprintf("%v.%v%v", sp.QuestionId, sp.TranslatedTitle, ext)),
-				[]byte(text), 0666)
+		engine.Table("question").Where("question_id = ?", sub.QuestionId).Get(&question)
+		text += fmt.Sprintf("%v 题目：%v.%v\n", c, question.QuestionId, question.TranslatedTitle)
+		text += fmt.Sprintf("%v 难度：%v\n", c, question.Difficulty)
+		text += fmt.Sprintf("%v 最后提交：%v\n", c, question.LastSubmittedAt)
+		text += fmt.Sprintf("%v 语言：%v\n", c, sub.Language)
+		text += fmt.Sprintf("%v 作者：ZrjaK\n\n", c)
+		text += sub.Code
+		os.Mkdir("answer", 0666)
+		if question.TranslatedTitle == "" {
+			return errors.New("查询题目出错")
 		}
+		ioutil.WriteFile(path.Join("answer", fmt.Sprintf("%v.%v%v", question.QuestionId, question.TranslatedTitle, ext)),
+			[]byte(text), 0666)
 		return nil
 	})
 }
@@ -196,74 +174,45 @@ func UpdateAcceptedQuestion() {
 	}
 	defer res.Body.Close()
 	body, _ := ioutil.ReadAll(res.Body)
-	q, sp := GetAcceptedQuestion(body)
+	q := GetAcceptedQuestion(body)
 	engine.Sync(new(Question))
 	engine.Where(`1 = 1`).Delete(new(Question))
 	engine.Insert(&q)
-
-	engine.Sync(new(SpecialQuestion))
-	engine.Where(`1 = 1`).Delete(new(SpecialQuestion))
-	engine.Insert(&sp)
-
 	engine.Sync(new(LastSubmission))
 	for h, i := range q {
-		n, _ := engine.Table("last_submission").Where("question_id = ?", i.QuestionId).Count()
+		n, _ := engine.Table("last_submission").Where("question_id = ? and last_submitted_at = ?", i.QuestionId, i.LastSubmittedAt).Count()
 		if n > 0 {
 			continue
 		}
 		lastSubmission := GetSubmissionList(i.TitleSlug)
 		lastSubmission.QuestionId = cast.ToString(i.QuestionId)
+		lastSubmission.LastSubmittedAt = i.LastSubmittedAt
 		if lastSubmission.Code == "" {
 			fmt.Println(h, i.QuestionId, "--------------")
 			continue
 		}
+		engine.Where("question_id = ?", i.QuestionId).Delete(new(LastSubmission))
 		engine.Insert(&lastSubmission)
-		engine.Update(&lastSubmission)
 		time.Sleep(time.Millisecond * 100)
 		fmt.Println(h, i.QuestionId, lastSubmission.DetailId, lastSubmission.Language)
 	}
-	for _, i := range sp {
-		n, _ := engine.Where("question_id = ?", i.QuestionId).Count()
-		if n > 0 {
-			continue
-		}
-		lastSubmission := GetSubmissionList(i.TitleSlug)
-		lastSubmission.QuestionId = i.QuestionId
-		engine.Insert(&lastSubmission)
-		engine.Update(&lastSubmission)
-		time.Sleep(time.Millisecond * 100)
-	}
 }
 
-func GetAcceptedQuestion(j []byte) ([]Question, []SpecialQuestion) {
+func GetAcceptedQuestion(j []byte) []Question {
 	questionList := []Question{}
-	specialQuestionList := []SpecialQuestion{}
 	questions := gjson.GetBytes(j, "data.userProfileQuestions.questions")
 	for _, q := range questions.Array() {
-		_, err := strconv.Atoi(q.Get("frontendId").String())
-		if err == nil {
-			questionList = append(questionList, Question{
-				TranslatedTitle: q.Get("translatedTitle").String(),
-				QuestionId:      q.Get("frontendId").Int(),
-				TitleSlug:       q.Get("titleSlug").String(),
-				Title:           q.Get("title").String(),
-				Difficulty:      q.Get("difficulty").String(),
-				LastSubmittedAt: time.Unix(q.Get("lastSubmittedAt").Int(), 0),
-				NumSubmitted:    q.Get("numSubmitted").Int(),
-			})
-		} else {
-			specialQuestionList = append(specialQuestionList, SpecialQuestion{
-				TranslatedTitle: q.Get("translatedTitle").String(),
-				QuestionId:      q.Get("frontendId").String(),
-				TitleSlug:       q.Get("titleSlug").String(),
-				Title:           q.Get("title").String(),
-				Difficulty:      q.Get("difficulty").String(),
-				LastSubmittedAt: time.Unix(q.Get("lastSubmittedAt").Int(), 0),
-				NumSubmitted:    q.Get("numSubmitted").Int(),
-			})
-		}
+		questionList = append(questionList, Question{
+			TranslatedTitle: q.Get("translatedTitle").String(),
+			QuestionId:      q.Get("frontendId").String(),
+			TitleSlug:       q.Get("titleSlug").String(),
+			Title:           q.Get("title").String(),
+			Difficulty:      q.Get("difficulty").String(),
+			LastSubmittedAt: time.Unix(q.Get("lastSubmittedAt").Int(), 0),
+			NumSubmitted:    q.Get("numSubmitted").Int(),
+		})
 	}
-	return questionList, specialQuestionList
+	return questionList
 }
 
 func InitEnv() {
